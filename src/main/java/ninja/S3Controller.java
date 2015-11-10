@@ -557,6 +557,7 @@ public class S3Controller implements Controller {
 
         Response response = ctx.respondWith();
         response.setHeader("ETag", etag);
+        response.addHeader(HttpHeaders.Names.ACCESS_CONTROL_EXPOSE_HEADERS, "ETag");
         response.status(HttpResponseStatus.OK);
     }
 
