@@ -473,6 +473,7 @@ public class S3Controller implements Controller {
         }
         HashCode hash = Files.hash(object.getFile(), Hashing.md5());
         response.addHeader(HttpHeaders.Names.ETAG, BaseEncoding.base16().encode(hash.asBytes()));
+        response.addHeader(HttpHeaders.Names.ACCESS_CONTROL_EXPOSE_HEADERS, "ETag");
         if (sendFile) {
             response.file(object.getFile());
         } else {
