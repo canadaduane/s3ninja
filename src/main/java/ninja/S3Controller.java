@@ -656,9 +656,8 @@ public class S3Controller implements Controller {
      * @param uploadId the multipart upload that should be cancelled
      */
     private void abortMultipartUpload(WebContext ctx, Bucket bucket, String id, String uploadId) {
-        System.out.println("aborting multiupload");
         multipartUploads.remove(uploadId);
-        ctx.respondWith().status(HttpResponseStatus.OK);
+        ctx.respondWith().status(HttpResponseStatus.NO_CONTENT); // 204
 
         File uploadDir = getUploadDir(uploadId);
         delete(uploadDir);

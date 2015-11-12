@@ -107,6 +107,9 @@ public class AwsLegacyHashCalculator {
         SecretKeySpec keySpec = new SecretKeySpec(storage.getAwsSecretKey().getBytes(), "HmacSHA1");
         Mac mac = Mac.getInstance("HmacSHA1");
         mac.init(keySpec);
+        
+        // System.out.println("String to Sign [AWS]:" + stringToSign.toString());
+        
         byte[] result = mac.doFinal(stringToSign.toString().getBytes(Charsets.UTF_8.name()));
         return BaseEncoding.base64().encode(result);
     }
