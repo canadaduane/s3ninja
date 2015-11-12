@@ -19,6 +19,16 @@ import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import java.net.URLEncoder;
+import java.net.URLDecoder;
+import java.io.UnsupportedEncodingException;
+
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.SortedMap;
+import java.util.TreeMap;
+
 import static com.google.common.base.Charsets.UTF_8;
 import static com.google.common.hash.Hashing.sha256;
 import static com.google.common.io.BaseEncoding.base16;
@@ -64,12 +74,19 @@ public class Aws4HashCalculator {
      * @throws Exception in case of an unexpected error
      */
     public String computeHash(WebContext ctx) throws Exception {
+        System.out.println("computeHash - AWS4");
         final MatchResult aws4Header = initializedMatcher(ctx);
 
-        byte[] dateKey = hmacSHA256(("AWS4" + storage.getAwsSecretKey()).getBytes(UTF_8), aws4Header.group(2));
-        byte[] dateRegionKey = hmacSHA256(dateKey, aws4Header.group(3));
+        String date = aws4Header.group(2);
+        String region = aws4Header.group(3);
+        String key = "AWS4" + storage.getAwsSecretKey();
+
+        byte[] dateKey = hmacSHA256(key.getBytes(UTF_8), date);
+        byte[] dateRegionKey = hmacSHA256(dateKey, region);
         byte[] dateRegionServiceKey = hmacSHA256(dateRegionKey, "s3");
         byte[] signingKey = hmacSHA256(dateRegionServiceKey, "aws4_request");
+
+        System.out.println("String to Sign [1]:" + buildStringToSign(ctx));
 
         byte[] signedData = hmacSHA256(signingKey, buildStringToSign(ctx));
         return base16().lowerCase().encode(signedData);
@@ -78,18 +95,138 @@ public class Aws4HashCalculator {
     private String buildStringToSign(final WebContext ctx) {
         final StringBuilder canonicalRequest = buildCanonicalRequest(ctx);
         final MatchResult aws4Header = initializedMatcher(ctx);
+
+        String region = aws4Header.group(3);
+
+        String credentialScope = getAmazonDateHeader(ctx).substring(0, 8) + "/"
+                                 + region + "/"
+                                 + "s3/aws4_request";
+        System.out.println("Canonical Request: " + canonicalRequest);
         return "AWS4-HMAC-SHA256\n"
-               + getAmazonDateHeader(ctx)
-               + "\n"
-               + getAmazonDateHeader(ctx).substring(0, 8)
-               + "/"
-               + aws4Header.group(3)
-               + "/s3/aws4_request\n"
+               + getAmazonDateHeader(ctx) + "\n"
+               + credentialScope + "\n"
                + hashedCanonicalRequest(canonicalRequest);
     }
 
     private String getAmazonDateHeader(final WebContext ctx) {
         return ctx.getHeaderValue("x-amz-date").asString();
+    }
+
+    private String canonicalQueryString(String queryString) {
+        String queryStringWithoutQuestionMark;
+
+        if (!queryString.isEmpty() && queryString.charAt(0) == '?') {
+            queryStringWithoutQuestionMark = queryString.substring(1);
+        } else {
+            queryStringWithoutQuestionMark = queryString;
+        }
+
+        Map<String, String> params = this.createParameterMap(queryStringWithoutQuestionMark);
+        SortedMap<String, String> sortedParamMap = new TreeMap<String, String>(params);
+        return this.canonicalQueryString(sortedParamMap);
+    }
+
+    /**
+     * Canonicalize the query string as required by Amazon.
+     *
+     * From bibsonomy-social (GPL licensed)
+     * 
+     * @param sortedParamMap    Parameter name-value pairs in lexicographical order.
+     * @return                  Canonical form of query string.
+     */
+    private String canonicalQueryString(SortedMap<String, String> sortedParamMap) {
+        if (sortedParamMap.isEmpty()) {
+            return "";
+        }
+
+        StringBuffer buffer = new StringBuffer();
+        Iterator<Map.Entry<String, String>> iter = sortedParamMap.entrySet().iterator();
+
+        while (iter.hasNext()) {
+            Map.Entry<String, String> kvpair = iter.next();
+            buffer.append(percentEncodeRfc3986(kvpair.getKey()));
+            buffer.append("=");
+            buffer.append(percentEncodeRfc3986(kvpair.getValue()));
+            if (iter.hasNext()) {
+                buffer.append("&");
+            }
+        }
+        String canonical = buffer.toString();
+        return canonical;
+    }
+
+    /**
+     * Percent-encode values according the RFC 3986. The built-in Java
+     * URLEncoder does not encode according to the RFC, so we make the
+     * extra replacements.
+     *
+     * From bibsonomy-social (GPL licensed)
+     * 
+     * @param s decoded string
+     * @return  encoded string per RFC 3986
+     */
+    private String percentEncodeRfc3986(String s) {
+        String out;
+        try {
+            /*
+             * Somehow the encode() Method appends a carriage return and new line char to the string.
+             * Therefore this signature does not match the Amazon signature.
+             * 
+             * This is not the most elegant way to fix, but replacing the "chars" is working for now.
+             */
+            out = URLEncoder.encode(s, "UTF-8")
+                .replace("+", "%20")
+                .replace("*", "%2A")
+                .replace("%7E", "~")
+                .replace("%0D%0A", "");
+        } catch (UnsupportedEncodingException e) {
+            out = s;
+        }
+        return out;
+    }
+
+    /**
+     * Takes a query string, separates the constituent name-value pairs
+     * and stores them in a hashmap.
+     *
+     * From bibsonomy-social (GPL licensed)
+     * 
+     * @param queryString
+     * @return
+     */
+    private Map<String, String> createParameterMap(String queryString) {
+        Map<String, String> map = new HashMap<String, String>();
+        String[] pairs = queryString.split("&");
+
+        for (String pair: pairs) {
+            if (pair.length() < 1) {
+                continue;
+            }
+
+            String[] tokens = pair.split("=",2);
+            for(int j=0; j<tokens.length; j++)
+            {
+                try {
+                    tokens[j] = URLDecoder.decode(tokens[j], "UTF-8");
+                } catch (UnsupportedEncodingException e) {
+                }
+            }
+            switch (tokens.length) {
+                case 1: {
+                    if (pair.charAt(0) == '=') {
+                        map.put("", tokens[0]);
+                    } else {
+                        map.put(tokens[0], "");
+                    }
+                    break;
+                }
+                case 2: {
+                    map.put(tokens[0], tokens[1]);
+                    break;
+                }
+            }
+        }
+        return map;
     }
 
     private StringBuilder buildCanonicalRequest(final WebContext ctx) {
@@ -98,7 +235,7 @@ public class Aws4HashCalculator {
         canonicalRequest.append("\n");
         canonicalRequest.append(ctx.getRequestedURI());
         canonicalRequest.append("\n");
-        canonicalRequest.append(ctx.getQueryString());
+        canonicalRequest.append(canonicalQueryString(ctx.getQueryString()));
         canonicalRequest.append("\n");
 
         for (String name : aws4Header.group(4).split(";")) {
